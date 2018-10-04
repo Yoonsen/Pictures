@@ -15,7 +15,12 @@ def load_picture(url):
     r.raw.decode_content=True
     #print(r.status_code)
     return r.raw
+ 
+def picture_urns(json):
+    urns = [f['metadata']['identifiers']['urn'] for f in  json['_embedded']['mediaTypeResults'][0]['result']['_embedded']['items'] if 'urn' in f['metadata']['identifiers']]
+    return urns
 
+    
 def find_picture(term):
     x = super_search(term)
     urns = [f['metadata']['identifiers']['urn'] for f in  x['_embedded']['mediaTypeResults'][0]['result']['_embedded']['items'] if 'urn' in f['metadata']['identifiers']]
