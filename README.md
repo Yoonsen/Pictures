@@ -3,11 +3,12 @@
 # Code for searching and downloading thumbnail pictures from the National Library of Norway
 
 Imported resources
-``
+
+```
 from PIL import Image
 import requests
 import json
-``
+```
 
 ### get_manifest(urn):
 Access the IIIF manifest of a picture from its URN. Returns link to full size image.
