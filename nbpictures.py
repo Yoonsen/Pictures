@@ -23,3 +23,6 @@ def find_picture(term):
     return [p['sequences'][0]['canvases'][0]['images'][0]['resource']['@id'] for p in found]
 
 picture_url = lambda result, i, size: result['_embedded']['mediaTypeResults'][0]['result']['_embedded']['items'][i]['_links']['thumbnail_custom']['href'].format(width=0, height=size)
+
+def show_picture(pictures, number=0, size=500):
+    return Image.open(load_picture(picture_url(pictures, number, size)))
