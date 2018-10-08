@@ -6,15 +6,14 @@ def iiif_manifest(urn):
     r = requests.get("https://api.nb.no/catalog/v1/iiif/{urn}/manifest".format(urn=urn))
     return r.json()
 
+def mods(urn):
+    r = requests.get("https://api.nb.no:443/catalog/v1/metadata/{id}/mods".format(urn=urn))
+    return r.json()
 
-def search_urns(term):
-    """Find all urns as customized thumbnails"""
-    
-    return picture_urns(super_search(term))
 
 def super_search(term, number=50, page=0):
     """Søk etter term og få ut json"""
-    number = max(number, 50)
+    number = min(number, 50)
     r = requests.get(
         "https://api.nb.no:443/catalog/v1/search", 
          params = {
@@ -25,28 +24,61 @@ def super_search(term, number=50, page=0):
          }
     )
     return r.json()
- 
-def picture_urns(json):
-    """From result of super_search, to be fed into iiif_manifest"""
 
+def find_urls(term, number=50, page=0):
+    """generates urls from super_search for pictures"""
+    x = super_search(term, number, page)
+    try:
+        urls = [
+            f['_links']['thumbnail_custom']['href']
+            for f in x['_embedded']['mediaTypeResults'][0]['result']['_embedded']['items'] 
+            if f['accessInfo']['accessAllowedFrom'] == 'EVERYWHERE'
+            and 'thumbnail_custom' in f['_links']
+        ]
+    except:
+        urls = [' ... hmm ...']
+    return urls
+
+def get_picture_from_urn(urn, width=0, height=300):
+    meta = iiif_manifest(urn)
+    if 'error' not in meta:
+        if width == 0 and height == 0:
+            url = "https://www.nb.no/services/image/resolver/{urn}/full/full/0/native.jpg".format(urn=urn)
+        else:
+            url = "https://www.nb.no/services/image/resolver/{urn}/full/{width},{height}/0/native.jpg".format(urn=urn, width=width, height=height)
+        #print(url)
+    return Image.open(load_picture(url))
+
+def get_picture_from_url(url, width=0, height=300):
+    return Image.open(
+        load_picture(
+            url.format(width=width, height=height)
+        )
+    )
+
+def get_metadata_from_url(url):
+    import re
+    urn = re.findall("(URN.*?)(?:/)", url)[0]
+    triple = iiif_manifest(urn)
+    #print(urn, triple)
+    r = dict()
+    if not 'error' in triple:
+        r = {x['label']:x['value'] for x in triple['metadata']  if 'label' in x }
+    else:
+        r = triple['error']
+    return r
+
+def find_urns(term):
+    """From result of super_search, to be fed into iiif_manifest"""
+    
+    ss = super_search(term)
     urns = [
         f['metadata']['identifiers']['urn'] 
-        for f in  json['_embedded']['mediaTypeResults'][0]['result']['_embedded']['items'] 
+        for f in  ss['_embedded']['mediaTypeResults'][0]['result']['_embedded']['items'] 
         if 'urn' in f['metadata']['identifiers']
     ]
     return urns
 
-def picture_urls(json_from_super_search, size=200):
-    """generates urls from super_search"""
-    
-    urls = [
-        f['_links']['thumbnail_custom']['href'].format(width=0, height=size) 
-        for f in json_from_super_search['_embedded']['mediaTypeResults'][0]['result']['_embedded']['items'] 
-        if f['accessInfo']['accessAllowedFrom'] == 'EVERYWHERE'
-        and 'thumbnail_custom' in f['_links']
-    ]
-    
-    return urls
 
 def load_picture(url):
     r = requests.get(url, stream=True)
@@ -54,20 +86,20 @@ def load_picture(url):
     #print(r.status_code)
     return r.raw
 
-def find_picture(term):
-    x = super_search(term)
-    urns = [
-        f['metadata']['identifiers']['urn'] 
-        for f in  x['_embedded']['mediaTypeResults'][0]['result']['_embedded']['items'] 
-        if 'urn' in f['metadata']['identifiers']
-    ]
-    found = [get_manifest(urn) for urn in urns]
-    
-    return [p['sequences'][0]['canvases'][0]['images'][0]['resource']['@id'] for p in found]
+def json2html(meta):
+    items = ["<dt>{key}</dt><dd>{val}</dd>".format(key=key, val= meta[key]) for key in meta]
+    result = "<dl>{items}</dl>".format(items=' '.join(items))
+    return result
+        
 
-picture_url = lambda pics, item = 0, width=400: picture_urls(pics,200)[item]
-
-picture_search = lambda term, size=200: picture_urls(super_search(term, size))
-
-def show_picture(pictures, number=0, size=500):
-    return Image.open(load_picture(picture_url(pictures, number, size)))
+def display_finds(r):
+    """A list of urls in r is displayed as HTML"""
+    rows = ["<tr><td><img src='{row}'</td><td>{meta}</td></tr>".format(row=row, meta=json2html(get_metadata_from_url(row))).format(width=0, height=200) for row in r]
+    return HTML("""<html><head></head>
+     <body>
+     <table>
+     {rows}
+     </table>
+     </body>
+     </html>
+     """.format(rows=' '.join(rows)))
