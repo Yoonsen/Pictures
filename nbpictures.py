@@ -1,6 +1,7 @@
 from PIL import Image
 import requests
 import json
+from IPython.display import HTML
 
 def iiif_manifest(urn):
     r = requests.get("https://api.nb.no/catalog/v1/iiif/{urn}/manifest".format(urn=urn))
