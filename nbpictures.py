@@ -26,7 +26,7 @@ def super_search(term, number=50, page=0):
     )
     return r.json()
 
-def find_urls(term, number=50, page=0):
+def find_urls2(term, number=50, page=0):
     """generates urls from super_search for pictures"""
     x = super_search(term, number, page)
     try:
@@ -38,6 +38,20 @@ def find_urls(term, number=50, page=0):
         ]
     except:
         urls = [' ... hmm ...']
+    return urls
+
+def find_urls(term, number=50, page=0):
+    """generates urls from super_search for pictures"""
+    x = super_search(term, number, page)
+    try:
+        urls =[
+            f['_links']['thumbnail_custom']['href']
+            for f in x['_embedded']['items'] 
+            if f['accessInfo']['accessAllowedFrom'] == 'EVERYWHERE'
+            and 'thumbnail_custom' in f['_links']
+        ]
+    except:
+        urls = []
     return urls
 
 def get_picture_from_urn(urn, width=0, height=300):
@@ -79,6 +93,33 @@ def find_urns(term):
         if 'urn' in f['metadata']['identifiers']
     ]
     return urns
+
+def total_search(size=50, page=0):
+    """Finn de første antallet = 'size' fra side 'page' og få ut json"""
+    size = min(size, 50)
+    r = requests.get(
+        "https://api.nb.no:443/catalog/v1/items", 
+         params = {
+             'filter':'mediatype:bilder', 
+             'page':page, 
+             'size':size
+         }
+    )
+    return r.json()
+
+def total_urls(number=50, page=0):
+    """find urls sequentially """
+    x = total_search(number, page)
+    try:
+        urls = [
+            f['_links']['thumbnail_custom']['href']
+            for f in x['_embedded']['mediaTypeResults'][0]['result']['_embedded']['items'] 
+            if f['accessInfo']['accessAllowedFrom'] == 'EVERYWHERE'
+            and 'thumbnail_custom' in f['_links']
+        ]
+    except:
+        urls = []
+    return urls
 
 
 def load_picture(url):
