@@ -16,7 +16,7 @@ def super_search(term, number=50, page=0):
     """Søk etter term og få ut json"""
     number = min(number, 50)
     r = requests.get(
-        "https://api.nb.no:443/catalog/v1/search", 
+        "https://api.nb.no:443/catalog/v1/items", 
          params = {
              'q':term, 
              'filter':'mediatype:bilder', 
