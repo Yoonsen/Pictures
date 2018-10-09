@@ -111,9 +111,9 @@ def total_urls(number=50, page=0):
     """find urls sequentially """
     x = total_search(number, page)
     try:
-        urls = [
+        urls =[
             f['_links']['thumbnail_custom']['href']
-            for f in x['_embedded']['mediaTypeResults'][0]['result']['_embedded']['items'] 
+            for f in x['_embedded']['items'] 
             if f['accessInfo']['accessAllowedFrom'] == 'EVERYWHERE'
             and 'thumbnail_custom' in f['_links']
         ]
