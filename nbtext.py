@@ -89,7 +89,17 @@ def difference(first, second, rf, rs, years=(1980, 2000),smooth=1, corpus='bok')
     except:
         res = 'Mangler noen data - har bare for: ' + ', '.join([x for x in a.columns.append(b.columns)])
     return res
-    
+
+def df_combine(array_df):
+    """Combine one columns dataframes"""
+    import pandas as pd
+    cols = []
+    for i in range(len(a)):
+        #print(i)
+        if array_df[i].columns[0] in cols:
+            array_df[i].columns = [array_df[i].columns[0] + '_' + str(i)]
+        cols.append(array_df[i].columns[0])
+    return pd.concat(a, axis=1, sort=True)
 
 def col_agg(df, col='sum'):
     c = df.sum(axis=0)
@@ -979,3 +989,44 @@ class Corpus_urn:
 
 def check_vals(korpus, vals):
     return korpus[korpus.index.isin(vals)].sort_values(by=0, ascending=False)
+
+#======================== Utilities
+
+def xmlpretty(xmls):
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(xmls, features='lxml')
+    soup.prettify()
+    # '<html>\n <head>\n </head>\n <body>\n  <a href="http://example.com/">\n...'
+
+    print(soup.prettify())
+
+def dewey(dewey):
+    r = requests.get("https://api.nb.no:443/dewey/v1/list", params={'class':dewey, 'language':'nob'})
+    try:
+        ddk = r.json()
+
+        ddc = dict()
+
+        if 'deweyPathList' in ddk:
+            for item in ddk['deweyPathList']:
+                ddc[str(item['level'])] = [item['classValue'], item['heading']]
+    except:
+        ddc = []
+    return ddc
+
+def metadata_xml(URN, kind='marcxml'):
+    if isinstance(URN, int):
+        URN = "URN:NBN:no-nb_digibok_{urn}".format(urn=str(URN))
+    elif isinstance(URN, str):
+        if URN.startswith('URN'):
+            URN = URN
+        else:
+            URN = "URN:NBN:no-nb_digibok_{urn}".format(urn=URN)
+    
+    r = requests.get("https://api.nb.no:443/catalog/v1/metadata/{urn}/{kind}".format(urn=URN, kind=kind))
+    try:
+        res = r.text
+    except:
+        res = ""
+    return res
