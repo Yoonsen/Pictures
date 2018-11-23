@@ -15,7 +15,32 @@ try:
 except ImportError:
     print("wordcloud er ikke installert, kan ikke lage ordskyer")
 
+
+def ner(text = None, dist=False):
+    """Analyze text for named entities - set dist = True will return the four values that go into decision"""
+    r = []
+    if text != None:
+        r = requests.post("https://api.nb.no/ngram/ner", json={'text':text,'dist':dist})
+    return r.json()
     
+def check_navn(navn, limit=2, remove='Ja Nei Nå Dem De Deres Unnskyld Ikke Ah Hmm'.split()):
+    """Removes all items in navn with frequency below limit and words in all case as well as all words in list 'remove'"""
+    r = {x:navn[x] for x in navn if navn[x] > limit and x.upper() != x and not x in remove}
+    return r
+
+def check_edges(G, weight=1):    
+    return nx.Graph([edge for edge in G.edges(data=True) if edge[2]['weight'] >= weight])
+
+def word_freq(urn, words):
+    params = {'urn':urn, 'words':words}
+    r = requests.post("https://api.nb.no/ngram/freq", json=params)
+    return dict(r.json())
+
+def book_count(urns):
+    params = {'urns':urns}
+    r = requests.post("https://api.nb.no/ngram/book_count", json=params)
+    return dict(r.json())
+
 def sttr(urn, chunk=5000):
     r = requests.get("https://api.nb.no/ngram/sttr", json = {'urn':urn, 'chunk':chunk})
     return r.json()
@@ -30,19 +55,26 @@ def navn(urn):
     r = requests.get('https://api.nb.no/ngram/tingnavn', json={'urn':urn})
     return dict(r.json())
     
-def urn_from_text(T):
+def digibokurn_from_text(T):
     """Return URNs as 13 digits (any sequence of 13 digits is counted as an URN)"""
     return re.findall("(?<=digibok_)[0-9]{13}", T)
 
-def metadata(urn="""text"""):
+def urn_from_text(T):
+    """Return URNs as 13 digits (any sequence of 13 digits is counted as an URN)"""
+    return re.findall("[0-9]{13}", T)
+
+def metadata(urn=None):
     if type(urn) is str:
-        urns = urn
+        urns = urn.split()
     elif type(urn) is list:
-        urns = '-'.join([str(u) for u in urn])
+        if isinstance(urn[0], list):
+            urns = [u[0] for u in urn]
+        else:
+            urns = urn
     else:
-        urns = str(urn)
-        
-    r = requests.get("https://api.nb.no/ngram/meta", params={'urn':urns})
+        urns = [urn]
+    #print(urns)
+    r = requests.post("https://api.nb.no/ngram/meta", json={'urn':urns})
     return r.json()
 
 
@@ -55,19 +87,22 @@ def pure_urn(data):
         List[str]: A list of URNs. Empty list if input is on the wrong
             format or contains no URNs
     """
+    korpus_def = []
     if isinstance(data, list):
         if not data:  # Empty list
-            return []
+            korpus_def = []
         if isinstance(data[0], list):  # List of lists
             try:
-                return [x[0] for x in data]
+                korpus_def = [x[0] for x in data]
             except IndexError:
-                return []
+                korpus_def = []
         else:  # Assume data is already a list of URNs
-            return data
+            korpus_def = data
     elif isinstance(data, str):
-        return urn_from_text(data)
-    return []
+        korpus_def = urn_from_text(data)
+    elif isinstance(data, int):
+        korpus_def = [data]
+    return korpus_def
 
 
 def difference(first, second, rf, rs, years=(1980, 2000),smooth=1, corpus='bok'):
@@ -131,6 +166,30 @@ def get_urn(metadata=None):
     r = requests.get('https://api.nb.no/ngram/urn', json=metadata)
     return r.json()
 
+def refine_urn(urns, metadata=None):
+    """Refine a list urns using extra information"""
+    if metadata is None:
+        metadata = {}
+    metadata['urns'] = urns
+    if not ('words' in metadata):
+        metadata['words'] = []
+    if not ('next' in metadata or 'neste' in metadata):
+        metadata['next'] = 520
+    if not 'year' in metadata:
+        metadata['year'] = 1500
+    r = requests.post('https://api.nb.no/ngram/refineurn', json=metadata)
+    return r.json()
+
+def get_best_urn(word, metadata=None):
+    """Get the best urns from metadata containing a specific word"""
+    metadata['word'] = word
+    if not ('next' in metadata or 'neste' in metadata):
+        metadata['next'] = 600
+    if not 'year' in metadata:
+        metadata['year'] = 1500
+    r = requests.get('https://api.nb.no/ngram/best_urn', json=metadata)
+    return r.json()
+
 def get_papers(top=5, cutoff=5, navn='%', yearfrom=1800, yearto=2020, samplesize=100):
     """Get newspapers"""
     div = lambda x, y: (int(x/y), x % y)
@@ -156,7 +215,149 @@ def get_papers(top=5, cutoff=5, navn='%', yearfrom=1800, yearto=2020, samplesize
 
     return [dict(x) for x in r]
 
-def collocation(word, yearfrom=2010, yearto=2018, before=3, after=3, limit=1000, corpus='avis'):
+
+def urn_coll(word, urns=[], after=5, before=5, limit=1000):
+    """Find collocations for word in a set of book URNs. Only books at the moment"""
+    if isinstance(urns[0], list):  # urns assumed to be list of list with urn-serial as first element
+        urns = [u[0] for u in urns]
+        
+    r = requests.post("https://api.nb.no/ngram/urncoll", json={'word':word, 'urns':urns, 
+                                                                   'after':after, 'before':before, 'limit':limit})
+    return pd.DataFrame.from_dict(r.json(), orient='index').sort_values(by=0, ascending = False)
+
+
+def urn_coll_words(words, urns=None, after=5, before=5, limit=1000):
+    """Find collocations for a group of words within a set of books given by a list of URNs. Only books at the moment"""
+    coll = pd.DataFrame()
+    if urns != None:
+        if isinstance(urns[0], list):  # urns assumed to be list of list with urn-serial as first element
+            urns = [u[0] for u in urns]
+        colls = Counter()
+        if isinstance(words, str):
+            words = words.split()
+        res = Counter()
+        for word in words: 
+            try:
+                res += Counter(
+                    requests.post(
+                        "https://api.nb.no/ngram/urncoll", 
+                        json={
+                            'word':word, 
+                            'urns':urns, 
+                            'after':after, 
+                            'before':before, 
+                            'limit':limit}
+                    ).json()
+                )
+            except:
+                True
+        coll = pd.DataFrame.from_dict(res, orient='index')
+    return coll.sort_values(by=coll.columns[0], ascending = False)
+
+
+def get_aggregated_corpus(urns, top=0, cutoff=0):
+    res = Counter()
+    if isinstance(urns[0], list):  # urns assumed to be list of list with urn-serial as first element
+        urns = [u[0] for u in urns]
+    for u in urns:
+        #print(u)
+        res += get_freq(u, top = top, cutoff = cutoff)
+    return pd.DataFrame.from_dict(res, orient='index').sort_values(by=0, ascending = False)
+
+
+def compare_word_bags(bag_of_words, another_bag_of_words, first_freq = 0, another_freq = 1, top=100, first_col = 0, another_col= 0):
+    """Compare two columns taken from two or one frame. Parameters x_freq are frequency limits used to cut down candidate words
+    from the bag of words. Compare along the columns where first_col and another_col are column numbers. Typical situation is that
+    bag_of_words is a one column frame and another_bag_of_words is another one column frame. When the columns are all from one frame, 
+    just change column numbers to match the columns"""
+    diff = bag_of_words[bag_of_words > first_freq][bag_of_words.columns[first_col]]/another_bag_of_words[another_bag_of_words > another_freq][another_bag_of_words.columns[another_col]] 
+       
+    return frame(diff, 'diff').sort_values(by='diff', ascending=False)[:top]
+
+
+def collocation(
+    word, 
+    yearfrom=2010, 
+    yearto=2018, 
+    before=3, 
+    after=3, 
+    limit=1000, 
+    corpus='avis',
+    lang='nob',
+    title='%',
+    ddk='%', 
+    subtitle='%'):
+    """Defined collects frequencies for a given word"""
+    
+    data =  requests.get(
+        "https://api.nb.no/ngram/collocation", 
+        params={
+            'word':word,
+            'corpus':corpus, 
+            'yearfrom':yearfrom, 
+            'before':before,
+            'after':after,
+            'limit':limit,
+            'yearto':yearto,
+        'title':title,
+        'ddk':ddk,
+        'subtitle':subtitle}).json()
+    return pd.DataFrame.from_dict(data['freq'], orient='index')
+
+
+def collocation_data(words, yearfrom = 2000, yearto = 2005, limit = 1000, before = 5, after = 5, title = '%', corpus='bok'):
+    """Collocation for a set of words sum up all the collocations words is a list of words or a blank separated string of words"""
+    import sys
+    a = dict()
+    
+    if isinstance(words, str):
+        words = words.split()
+    
+    for word in words:
+        
+        print(word)
+        try:
+            
+            a[word] = collocation(
+                word, 
+                yearfrom = yearfrom, yearto = yearto, limit = limit, 
+                corpus = corpus, before = before, 
+                after = after, title = title
+            )
+            
+            a[word].columns = [word]
+        
+        except:    
+            print(word, ' feilsituasjon', sys.exc_info())
+    result = pd.DataFrame()
+    for w in a:
+        result = result.join(a[w], how='outer')
+    return pd.DataFrame(result.sum(axis=1)).sort_values(by=0, ascending=False)
+
+class CollocationCorpus:
+    from random import sample
+    
+    def __init__(self, corpus = None, name='', maximum_texts = 500):
+        urns = pure_urn(corpus)
+        
+        if len(urns) > maximum_texts:      
+            selection = random(urns, maximum_texts)
+        else:
+            selection = urns
+            
+        self.corpus_def = selection
+        self.corpus = get_aggregated_corpus(self.corpus_def, top=0, cutoff=0)
+
+
+    def summary(self, head=10):
+        info = {
+            'corpus_definition':self.corpus[:head],
+            'number_of_words':len(self.corpus)
+            
+        }
+        return info
+
+def collocation_old(word, yearfrom=2010, yearto=2018, before=3, after=3, limit=1000, corpus='avis'):
     data =  requests.get(
         "https://api.nb.no/ngram/collocation", 
         params={
@@ -701,7 +902,7 @@ def get_konk(word, params=None, kind='html'):
     if kind=='html':
         rows = ""
         row_template = ("<tr>"
-                        "<td><a href='{urn}' target='_'>{urnredux}</a></td>"
+                        "<td><a href='{urn}?searchText={kw}' target='_'>{urnredux}</a></td>"
                         "<td>{b}</td>"
                         "<td>{w}</td>"
                         "<td style='text-align:left'>{a}</td>"
@@ -709,6 +910,7 @@ def get_konk(word, params=None, kind='html'):
         if corpus == 'bok':
             for x in r.json():
                 rows += row_template.format(
+                    kw = word,
                     urn=x['urn'],
                     urnredux=','.join([x['author'], x['title'], str(x['year'])]),
                     b=x['before'],
@@ -718,6 +920,7 @@ def get_konk(word, params=None, kind='html'):
             #print(r.json())
             for x in r.json():
                 rows += row_template.format(
+                    kw = word,
                     urn=x['urn'],
                     urnredux='-'.join(x['urn'].split('_')[2:6:3]),
                     b=x['before'],
@@ -782,12 +985,13 @@ def get_urnkonk(word, params=None, html=True):
         for x in r.json():
             rows += """<tr>
                 <td>
-                    <a href='{urn}' target='_blank' style='text-decoration:none'>{urnredux}</a>
+                    <a href='{urn}?searchText={kw}' target='_blank' style='text-decoration:none'>{urnredux}</a>
                 </td>
                 <td>{b}</td>
                 <td>{w}</td>
                 <td style='text-align:left'>{a}</td>
-            </tr>\n""".format(urn=x['urn'],
+            </tr>\n""".format(kw=word,
+                              urn=x['urn'],
                               urnredux="{t}, {f}, {y}".format(t=x['title'], f=x['author'], y=x['year']),
                               b=x['before'],
                               w=x['word'],
