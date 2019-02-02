@@ -1,5 +1,6 @@
 import json
 import random
+import numpy.random
 import re
 from collections import Counter
 
@@ -23,7 +24,7 @@ def ner(text = None, dist=False):
         r = requests.post("https://api.nb.no/ngram/ner", json={'text':text,'dist':dist})
     return r.json()
     
-def check_navn(navn, limit=2, remove='Ja Nei Nå Dem De Deres Unnskyld Ikke Ah Hmm'.split()):
+def check_navn(navn, limit=2, remove='Ja Nei Nå Dem De Deres Unnskyld Ikke Ah Hmm Javel Akkurat Jaja Jaha'.split()):
     """Removes all items in navn with frequency below limit and words in all case as well as all words in list 'remove'"""
     r = {x:navn[x] for x in navn if navn[x] > limit and x.upper() != x and not x in remove}
     return r
@@ -54,7 +55,21 @@ def navn(urn):
         urn = urn[0]
     r = requests.get('https://api.nb.no/ngram/tingnavn', json={'urn':urn})
     return dict(r.json())
-    
+
+def names(urn, ratio = 0.3, cutoff = 2):
+    """ Return namens in book with urn. Returns uni- , bi-, tri- and quadgrams """
+    if type(urn) is list:
+        urn = urn[0]
+    r = requests.get('https://api.nb.no/ngram/names', json={'urn':urn, 'ratio':ratio, 'cutoff':cutoff})
+    x = r.json()
+    result = (
+        Counter(x[0][0]),
+        Counter({tuple(x[1][i][0]):x[1][i][1] for i in range(len(x[1]))}),
+        Counter({tuple(x[2][i][0]):x[2][i][1] for i in range(len(x[2]))}),
+        Counter({tuple(x[3][i][0]):x[3][i][1] for i in range(len(x[3]))})
+    )
+    return result
+
 def digibokurn_from_text(T):
     """Return URNs as 13 digits (any sequence of 13 digits is counted as an URN)"""
     return re.findall("(?<=digibok_)[0-9]{13}", T)
@@ -154,6 +169,18 @@ def get_freq(urn, top=50, cutoff=3):
     r = requests.get("https://api.nb.no/ngram/urnfreq", json={'urn':urn, 'top':top, 'cutoff':cutoff})
     return Counter(dict(r.json()))
 
+
+def book_urn(author='%', title="%", ddk="%", subject="", period=(1100, 2020), gender="", limit=20 ):
+    """Get URNs for books with metadata"""
+    return get_urn({
+        "author": author,
+        "title":title,
+        "ddk":ddk,
+        "subject":subject,
+        "year":period[0],
+        'next':period[1] - period[0],
+        "limit":limit
+    })
 
 def get_urn(metadata=None):
     """Get urns from metadata"""
@@ -373,7 +400,7 @@ def collocation_old(word, yearfrom=2010, yearto=2018, before=3, after=3, limit=1
 def heatmap(df, color='green'):
     return df.fillna(0).style.background_gradient(cmap=sns.light_palette(color, as_cmap=True))
 
-def get_corpus_text(urns, top = 10000, cutoff=5):
+def get_corpus_text(urns, top = 0, cutoff=0):
     k = dict()
     for u in urns:
         #print(u)
@@ -411,7 +438,7 @@ def convert_list_of_freqs_to_dataframe(referanse):
     normalize_corpus_dataframe(result)
     return result
 
-def get_corpus(top=5, cutoff=5, navn='%', corpus='avis', yearfrom=1800, yearto=2020, samplesize=10):
+def get_corpus(top=0, cutoff=0, navn='%', corpus='avis', yearfrom=1800, yearto=2020, samplesize=10):
     if corpus == 'avis':
         result = get_papers(top=top, cutoff=cutoff, navn=navn, yearfrom=yearfrom, yearto=yearto, samplesize=samplesize)
         res = convert_list_of_freqs_to_dataframe(result)
@@ -661,8 +688,9 @@ def compute_assoc(coll_frame, column, exponent=1.1, refcolumn = 'reference_corpu
     return pd.DataFrame(coll_frame[column]**exponent/coll_frame.mean(axis=1))
     
 
+
 class Corpus:
-    def __init__(self, filename = '', period = (1950,1960), author='%', 
+    def __init__(self, filename = '', target_urns = None, reference_urns = None,  period = (1950,1960), author='%', 
                  title='%', ddk='%', gender='%', subject='%', reference = 100, max_books=100):
         params = {
             'year':period[0], 
@@ -676,47 +704,62 @@ class Corpus:
             'reference':reference
         }
         self.params = params
-        
+        self.coll = dict()
+        self.coll_graph = dict()
         if filename == '':
-            målkorpus_def = get_urn(params)
+            if target_urns != None:
+                målkorpus_def = target_urns
+            else:
+                målkorpus_def = get_urn(params)
 
             #print("Antall bøker i målkorpus ", len(målkorpus_def))
-            målkorpus_urn = [x[0] for x in målkorpus_def]
-            if len(målkorpus_urn) > max_books:
-                target_urn = random.sample(målkorpus_urn,max_books)
+            if isinstance(målkorpus_def[0], list):
+                målkorpus_urn = [str(x[0]) for x in målkorpus_def]
+                #print(målkorpus_urn)
+            else:
+                målkorpus_urn = målkorpus_def
+            if len(målkorpus_urn) > max_books and max_books > 0:
+                target_urn = list(numpy.random.choice(målkorpus_urn, max_books))
             else:
                 target_urn = målkorpus_urn
-                
-            if type(reference) is pd.core.frame.DataFrame:
-                reference = reference 
+
+            if reference_urns != None:
+                referansekorpus_def = reference_urns
             else:
+                # select from period, usually used only of target is by metadata
                 referansekorpus_def = get_urn({'year':period[0], 'next':period[1]-period[0], 'limit':reference})
- 
-                              
+
+
             #print("Antall bøker i referanse: ", len(referansekorpus_def))
-            referanse_urn = [x[0] for x in referansekorpus_def]
+            # referansen skal være distinkt fra målkorpuset
+            referanse_urn = [str(x[0]) for x in referansekorpus_def]
             self.reference_urn = referanse_urn
             self.target_urn = target_urn
             # make sure there is no overlap between target and reference
+            # 
             referanse_urn = list(set(referanse_urn) - set(target_urn))
-            
-            referanse_txt = get_corpus_text(referanse_urn)
+
+
             målkorpus_txt = get_corpus_text(target_urn)
-            
-            normalize_corpus_dataframe(referanse_txt)
             normalize_corpus_dataframe(målkorpus_txt)
-            
-            combo = målkorpus_txt.join(referanse_txt)
-            
-            #self.combo = combo 
-            #self.reference = referanse_txt
-            #self.target = målkorpus_txt
- 
-            #self.reference = aggregate(reference)
-            #self.reference.columns = ['reference_corpus']
-            
+            if referanse_urn != []:
+                referanse_txt = get_corpus_text(referanse_urn)
+                normalize_corpus_dataframe(referanse_txt)
+                combo = målkorpus_txt.join(referanse_txt)
+
+            else:
+                referanse_txt = målkorpus_txt
+                combo = målkorpus_txt
+                
+            self.combo = combo 
+            self.reference = referanse_txt
+            self.target = målkorpus_txt
+
+            self.reference = aggregate(self.reference)
+            self.reference.columns = ['reference_corpus']
+
             ## dokumentfrekvenser
-            
+
             mål_docf = pd.DataFrame(pd.DataFrame(målkorpus_txt/målkorpus_txt).sum(axis=1))
             combo_docf = pd.DataFrame(pd.DataFrame(combo/combo).sum(axis=1))
             ref_docf = pd.DataFrame(pd.DataFrame(referanse_txt/referanse_txt).sum(axis=1))
@@ -724,17 +767,18 @@ class Corpus:
             ### Normaliser dokumentfrekvensene
             normalize_corpus_dataframe(mål_docf)
             normalize_corpus_dataframe(combo_docf)
-            #normalize_corpus_dataframe(ref_docf)
-            
+            normalize_corpus_dataframe(ref_docf)
+
             self.målkorpus_tot = aggregate(målkorpus_txt)
             self.combo_tot = aggregate(combo)
             self.mål_docf = mål_docf
             self.combo_docf = combo_docf
-            
+            self.lowest = self.combo_tot.sort_values(by=0)[0][0]
         else:
             self.load(filename)
+        return 
             
-                
+    
     def difference(self, freq_exp=1.1, doc_exp=1.1, top = 200, aslist=True):
         res = pd.DataFrame(
             (self.målkorpus_tot**freq_exp/self.combo_tot)*(self.mål_docf**doc_exp/self.combo_docf)
@@ -750,6 +794,7 @@ class Corpus:
     
 
     def save(self, filename):
+
         model = {
             'params':self.params,   
             'target': self.målkorpus_tot.to_json(),
@@ -778,6 +823,67 @@ class Corpus:
                 print('noe gikk galt')
         return True
     
+    def collocations(self, word, after=5, before=5, limit=1000):
+        """Find collocations for word in a set of book URNs. Only books at the moment"""
+        
+        r = requests.post(
+            "https://api.nb.no/ngram/urncoll", 
+            json={
+                'word': word, 
+                'urns': self.target_urn,
+                'after': after, 
+                'before': before, 
+                'limit': limit
+            }
+        )
+
+        temp = pd.DataFrame.from_dict(r.json(), orient='index')
+        normalize_corpus_dataframe(temp)
+        self.coll[word] = temp.sort_values(by = temp.columns[0], ascending = False)
+        return True
+    
+    def conc(self, word, before=8, after=8, size=10, combo=0):
+        
+        
+        if combo == 0:
+            urns = self.target_urn + self.reference_urn
+        elif combo == 1:
+            urns = self.target_urn
+        else:
+            urns = self.reference_urn
+        if len(urns) > 300:
+            urns = list(numpy.random.choice(urns, 300, replace=False))
+        return get_urnkonk(word, {'urns':urns, 'before':before, 'after':after, 'limit':size})
+    
+    def sort_collocations(self, word, comparison = None, exp = 1.0, above = None):
+        
+        if comparison == None:
+            comparison = self.combo_tot[0]
+        try:
+            res = pd.DataFrame(self.coll[word][0]**exp/comparison)
+
+        except KeyError:
+            print('Constructing a collocation for {w} with default parameters.'.format(w=word))
+            self.collocations(word)
+            res = pd.DataFrame(self.coll[word][0]**exp/comparison)
+        if above == None:
+        	above = self.lowest
+        res = res[self.combo_tot > above]
+        return res.sort_values(by = 0, ascending = False)
+    
+    def search_collocations(self, word, words, comparison = None, exp = 1.0):
+        
+        if comparison == None:
+            comparison = self.combo_tot[0]
+        try:
+            res = pd.DataFrame(self.coll[word][0]**exp/comparison)
+        except KeyError:
+            print('Constructing a collocation for {w} with default parameters.'.format(w=word))
+            self.collocations(word)
+            res = pd.DataFrame(self.coll[word][0]**exp/comparison)
+        search_items = list(set(res.index) & set(words))
+        return res.transpose()[search_items].transpose().sort_values(by = 0, ascending = False)
+    
     def summary(self, head=10):
         info = {
             'parameters':self.params,
@@ -794,7 +900,26 @@ class Corpus:
         sub = [w for w in words if w in df.index]
         res = df.transpose()[sub].transpose().sort_values(by=df.columns[0], ascending=False)
         return res
-            
+    
+    def make_collocation_graph(self, target_word, top = 15, before = 4, after = 4, limit = 1000, exp=1):
+        """Make a cascaded network of collocations"""
+
+        self.collocations(target_word, before=before, after=after, limit=limit)
+        coll = self.sort_collocations(target_word, exp = exp)
+        target_graf = dict()
+        edges = []
+        for word in coll[:top].index:
+            edges.append((target_word, word))
+            if word.isalpha():
+                self.collocations(word, before=before, after=after,  limit=limit)
+                for w in self.sort_collocations(word, exp = exp)[:top].index:
+                    if w.isalpha():
+                        edges.append((word, w)) 
+
+        target_graph = nx.Graph()
+        target_graph.add_edges_from(edges)
+        self.coll_graph[target_word] = target_graph
+        return target_graph
         
 def vekstdiagram(urn, params=None):
     if params is None:
@@ -842,8 +967,10 @@ def check_words(urn, ordbag):
     return True
 
 def nb_ngram(terms, corpus='bok', smooth=3, years=(1810, 2010), mode='relative'):
-    return ngram_conv(get_ngram(terms, corpus=corpus), smooth=smooth, years=years, mode=mode)
-    
+    df = ngram_conv(get_ngram(terms, corpus=corpus), smooth=smooth, years=years, mode=mode)
+    df.index = df.index.astype(int)
+    return df
+
 def get_ngram(terms, corpus='avis'):
     req = requests.get(
         "http://www.nb.no/sp_tjenester/beta/ngram_1/ngram/query?terms={terms}&corpus={corpus}".format(
@@ -869,8 +996,17 @@ def ngram_conv(ngrams, smooth=1, years=(1810,2013), mode='relative'):
     return pd.DataFrame(ngc).rolling(window=smooth, win_type='triang').mean()
 
 
-def make_graph(word):
-    result = requests.get("https://www.nb.no/sp_tjenester/beta/ngram_1/galaxies/query?terms={word}".format(word=word))
+def make_graph(words, lang='nob', cutoff=20, leaves=0):
+    """Get galaxy from ngram-database. English and German provided by Google N-gram. 
+    Set leaves=1 to get the leaves. Parameter cutoff only works for lang='nob'. 
+    Specify English by setting lang='eng' and German by lang='ger'"""
+    
+    params = dict()
+    params['terms'] = words
+    params['corpus'] = lang
+    params['limit'] = cutoff
+    params['leaves'] = leaves
+    result = requests.get("https://www.nb.no/sp_tjenester/beta/ngram_1/galaxies/query", params=params)
     G = nx.DiGraph()
     edgelist = []
     if result.status_code == 200:
@@ -882,6 +1018,7 @@ def make_graph(word):
             edgelist += [(nodes[edge['source']]['name'], nodes[edge['target']]['name'], abs(edge['value']))]
     #print(edgelist)
     G.add_weighted_edges_from(edgelist)
+
     return G
 
 
@@ -1005,12 +1142,23 @@ def get_urnkonk(word, params=None, html=True):
         #r = r.style.set_properties(subset=['after'],**{'text-align':'left'})
     return res
 
-def frame(something, name):
+def frame(something, name = None):
+    """Try to make a frame out of something and name columns according to name, which should be a string or a list of strings,
+    one for each column. Mismatch in numbers is taken care of."""
+    
     if isinstance(something, dict):
         res = pd.DataFrame.from_dict(something, orient='index')
     else:
         res =  pd.DataFrame(something)
-    res.columns = [name]
+    number_of_columns = len(res.columns)
+    if name != None:
+        if isinstance(name, list):
+            if len(name) >= number_of_columns:
+                res.columns = name[:number_of_columns]
+            else:
+                res.columns = name + list(range(len(name), number_of_columns))
+        else:
+            res.columns = [name] + list(range(1, number_of_columns))
     return res
 
 def get_urns_from_docx(document):
@@ -1051,148 +1199,6 @@ def get_urns_from_files(mappe, file_type='txt'):
             urns[f] = get_urns_from_text(fn)
     return urns
 
-class Corpus_urn:
-    """Define Corpus with a list of URNs"""
-    from IPython.display import HTML, display
-    import pandas as pd
-    import json
-    
-    def __init__(self, filename = '', urns='', ref_urns = '', period = (1950,1960), author='%', title='%', ddk='%', subject='%', reference = 100, max_books=100):
-        import pandas
-        import random
-        
-        params = {'year':period[0], 
-                 'next': period[1]-period[0], 
-                 'subject':subject,
-                 'ddk':ddk, 
-                 'author':author, 
-                 'title':title, 
-                 'limit':max_books,
-                 'reference':reference}
-        self.params = params
-       
-        if filename == '':
-            if urns != '':
-                målkorpus_urn = urns
-            else:
-                målkorpus_def = get_urn(params)
-                målkorpus_urn = [x[0] for x in målkorpus_def]
-                
-            if len(målkorpus_urn) > max_books:
-                target_urn = random.sample(målkorpus_urn,max_books)
-            else:
-                target_urn = målkorpus_urn
-                
-            if type(reference) is pandas.core.frame.DataFrame:
-                reference = reference 
-            else:
-                if ref_urns != '':
-                    referanse_urn = ref_urns
-                else:
-                    referansekorpus_def = get_urn({'year':period[0], 'next':period[1]-period[0], 'limit':reference})
-                    referanse_urn = [x[0] for x in referansekorpus_def]
-            
-            self.reference_urn = referanse_urn
-            self.target_urn = target_urn
-            # make sure there is no overlap between target and reference
-            referanse_urn = list(set(referanse_urn) - set(target_urn))
-            
-            referanse_txt = get_corpus_text(referanse_urn)
-            målkorpus_txt = get_corpus_text(target_urn)
-            
-            normalize_corpus_dataframe(referanse_txt)
-            normalize_corpus_dataframe(målkorpus_txt)
-            
-            combo = målkorpus_txt.join(referanse_txt)
-            
-            #self.combo = combo 
-            #self.reference = referanse_txt
-            #self.target = målkorpus_txt
- 
-            #self.reference = aggregate(reference)
-            #self.reference.columns = ['reference_corpus']
-            
-            ## dokumentfrekvenser
-            
-            mål_docf = pd.DataFrame(pd.DataFrame(målkorpus_txt/målkorpus_txt).sum(axis=1))
-            combo_docf = pd.DataFrame(pd.DataFrame(combo/combo).sum(axis=1))
-            ref_docf = pd.DataFrame(pd.DataFrame(referanse_txt/referanse_txt).sum(axis=1))
-
-            ### Normaliser dokumentfrekvensene
-            normalize_corpus_dataframe(mål_docf)
-            normalize_corpus_dataframe(combo_docf)
-            #normalize_corpus_dataframe(ref_docf)
-            
-            self.målkorpus_tot = aggregate(målkorpus_txt)
-            self.combo_tot = aggregate(combo)
-            self.mål_docf = mål_docf
-            self.combo_docf = combo_docf
-            
-        else:
-            self.load(filename)
-            
-                
-    def difference(self, freq_exp=1.1, doc_exp=1.1, top = 200, aslist=True):
-        res = pd.DataFrame(
-            (self.målkorpus_tot**freq_exp/self.combo_tot)*(self.mål_docf**doc_exp/self.combo_docf)
-        )
-        res.columns = ['diff']
-        if top > 0:
-            res = res.sort_values(by=res.columns[0], ascending=False).iloc[:top]
-        else:
-            res = res.sort_values(by=res.columns[0], ascending=False)
-        if aslist == True:
-            res = HTML(', '.join(list(res.index)))
-        return res
-    
-
-    def save(self, filename):
-        model = {
-            'params':self.params,   
-            'target': self.målkorpus_tot.to_json(),
-            'combo': self.combo_tot.to_json(),
-            'target_df': self.mål_docf.to_json(),
-            'combo_df': self.combo_docf.to_json()
-        }
-
-        with open(filename, 'w', encoding = 'utf-8') as outfile:
-            outfile.write(json.dumps(model))
-        return True
-
-    def load(self, filename):
-        with open(filename, 'r') as infile:
-            try:
-                model = json.loads(infile.read())
-                #print(model['word'])
-                self.params = model['params']
-                #print(self.params)
-                self.målkorpus_tot = pd.read_json(model['target'])
-                #print(self.målkorpus_tot[:10])
-                self.combo_tot = pd.read_json(model['combo'])
-                self.mål_docf = pd.read_json(model['target_df'])
-                self.combo_docf = pd.read_json(model['combo_df'])
-            except:
-                print('noe gikk galt')
-        return True
-    
-    def summary(self, head=10):
-        info = {
-            'parameters':self.params,
-            'target_urn':self.target_urn[:head],
-            'reference urn':self.reference_urn[:head],
-            
-        }
-        return info
-
-    def search_words(self, words, freq_exp=1.1, doc_exp=1.1, aslist=False):
-        if type(words) is str:
-            words = [w.strip() for w in words.split()]
-        df = self.difference(freq_exp = freq_exp, doc_exp=doc_exp, aslist=aslist, top=0)
-        sub = [w for w in words if w in df.index]
-        return df.transpose()[sub].transpose().sort_values(by=df.columns[0], ascending=False)
-
-def check_vals(korpus, vals):
-    return korpus[korpus.index.isin(vals)].sort_values(by=0, ascending=False)
 
 #======================== Utilities
 
